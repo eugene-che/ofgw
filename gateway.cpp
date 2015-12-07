@@ -25,7 +25,7 @@ ip_port::ip_port(const std::string& str) {
 
 ip_port::ip_port(const sockaddr_in& addr) {
 	if (addr.sin_family != AF_INET)
-		throw std::domain_error("unknown sockaddr family");
+		throw std::invalid_argument("unknown sockaddr family");
 	ip = ntohl(addr.sin_addr.s_addr);
 	port = addr.sin_port;
 }
@@ -357,14 +357,15 @@ namespace of {
 
 
 void GateWay::handle_negotiator(negotiator_data *entry) {
+	const size_t buf_size = entry->buffer.size();
 	for(size_t i = 0; i < MAX_READS_PER_SESSION; ++i) {
 
 		size_t tail = entry->head + entry->size;
-		if (tail >= entry->buffer.size())
-			tail -= entry->buffer.size();
-		size_t capacity = entry->buffer.size() - tail;
+		if (tail >= buf_size) tail -= buf_size;
+		size_t space = buf_size - std::max(entry->size, tail);
+		if (!space) throw std::runtime_error("buffer is full");
 
-		int received = recv(entry->fd, &entry->buffer[tail], capacity, MSG_DONTWAIT);
+		int received = recv(entry->fd, &entry->buffer[tail], space, MSG_DONTWAIT);
 		if (!received) throw std::runtime_error("connection reset by peer");
 		if (received < 0) {
 			if (errno != EAGAIN && errno != EWOULDBLOCK)
@@ -373,17 +374,25 @@ void GateWay::handle_negotiator(negotiator_data *entry) {
 		}
 
 		entry->size += received;
-		uint8_t *buffer = &entry->buffer[entry->head];
 		while (entry->size >= sizeof(of::ofp_header)) {
 
-			size_t msg_size = ntohs( ((of::ofp_header*)buffer)->length );
+			uint8_t *msg_buf = &entry->buffer[entry->head];
+			size_t msg_size = ntohs( ((of::ofp_header*)msg_buf)->length );
 			if (entry->size < msg_size) break; // read full messages only
-			handle_message(entry, buffer, msg_size);
+
+			size_t left_to_end = buf_size - entry->head;
+			if (msg_size > left_to_end) { // fragmented message
+				msg_buf = new uint8_t[msg_size];
+				memcpy(msg_buf, &entry->buffer[entry->head], left_to_end);
+				memcpy(msg_buf + left_to_end, &entry->buffer[0], msg_size - left_to_end);
+			}
+
+			handle_message(entry, msg_buf, msg_size);
 
 			entry->size -= msg_size;
 			entry->head += msg_size;
-			if (entry->head >= entry->buffer.size())
-				entry->head = 0;
+			if (entry->head > buf_size) delete msg_buf;
+			if (entry->head >= buf_size) entry->head -= buf_size;
 		}
 	}
 }
