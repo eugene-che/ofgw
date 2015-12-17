@@ -357,7 +357,9 @@ namespace of {
 
 
 void GateWay::handle_negotiator(negotiator_data *entry) {
-	const size_t buf_size = entry->buffer.size();
+	// reserve a part of the buffer at the end to extract the length of
+	// openflow messages when switching to front side of the ring buffer
+	const size_t buf_size = entry->buffer.size() - sizeof(of::ofp_header);
 	for(size_t i = 0; i < MAX_READS_PER_SESSION; ++i) {
 
 		size_t tail = entry->head + entry->size;
@@ -375,13 +377,20 @@ void GateWay::handle_negotiator(negotiator_data *entry) {
 
 		entry->size += received;
 		while (entry->size >= sizeof(of::ofp_header)) {
+			const size_t left_to_end = buf_size - entry->head;
+			if (left_to_end < sizeof(of::ofp_header)) {
+				// copy the rest of ofp_header to a space after the end to get a proper length
+				// it is rather cheap: actual implementation will copy only a single 8 byte word
+				std::memcpy(&entry->buffer[buf_size], &entry->buffer[0], sizeof(of::ofp_header));
+			}
 
 			uint8_t *msg_buf = &entry->buffer[entry->head];
 			size_t msg_size = ntohs( ((of::ofp_header*)msg_buf)->length );
 			if (entry->size < msg_size) break; // read full messages only
 
-			size_t left_to_end = buf_size - entry->head;
-			if (msg_size > left_to_end) { // fragmented message
+			if (msg_size > left_to_end) {
+				// allocate temporary buffer to assemble fragmented messages
+				// into a single piece of continuos memory
 				msg_buf = new uint8_t[msg_size];
 				memcpy(msg_buf, &entry->buffer[entry->head], left_to_end);
 				memcpy(msg_buf + left_to_end, &entry->buffer[0], msg_size - left_to_end);

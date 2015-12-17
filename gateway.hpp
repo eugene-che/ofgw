@@ -57,7 +57,7 @@ struct negotiator_data : public listener_data {
 class GateWay {
 	const static size_t MAX_READS_PER_SESSION = 10;
 	const static size_t MAX_EVENTS_PER_EPOLL = 3;
-	const static size_t BUFFER_SIZE = 10000;
+	const static size_t BUFFER_SIZE = 0xFFFF + 8;
 	const static size_t OF_VERSION = 0x4;
 
 	std::unordered_map<uint32_t, negotiator_data*> transactinos;
